@@ -1,2 +1,362 @@
-# 2D-autonomous-delivery-agent-
-Design and implement an autonomous delivery agent that navigates a 2D grid city to  deliver packages
+import heapq
+import time
+import copy
+from collections import deque
+from enum import Enum
+
+
+class Terrain(Enum):
+    ROAD = 1
+    GRASS = 3
+    MUD = 5
+    WATER = 10  # Impassable unless specified otherwise
+
+
+class CellType(Enum):
+    EMPTY = 0
+    STATIC_OBSTACLE = -1
+    DYNAMIC_OBSTACLE = -2
+
+
+class Direction(Enum):
+    UP = (0, -1)
+    DOWN = (0, 1)
+    LEFT = (-1, 0)
+    RIGHT = (1, 0)
+
+
+class MovementType(Enum):
+    FOUR_WAY = 1
+    EIGHT_WAY = 2  # Optional diagonals
+
+
+class Agent:
+    def __init__(self, start_pos, goal_pos, grid, movement_type=MovementType.FOUR_WAY):
+        self.start_pos = start_pos
+        self.current_pos = start_pos
+        self.goal_pos = goal_pos
+        self.grid = grid
+        self.movement_type = movement_type
+        self.path = []
+        self.cost_so_far = 0
+        self.nodes_expanded = 0
+        self.execution_time = 0
+
+   def get_neighbors(self, pos):
+        x, y = pos
+        neighbors = []
+
+   directions = [
+            Direction.UP.value,
+            Direction.DOWN.value,
+            Direction.LEFT.value,
+            Direction.RIGHT.value
+        ]
+
+   if self.movement_type == MovementType.EIGHT_WAY:
+            directions.extend([
+                (-1, -1), (1, -1),
+                (-1, 1), (1, 1)
+            ])
+
+  for dx, dy in directions:
+            nx, ny = x + dx, y + dy
+            if 0 <= nx < len(self.grid[0]) and 0 <= ny < len(self.grid):
+                # Block static and dynamic obstacles
+                if self.grid[ny][nx] not in [CellType.STATIC_OBSTACLE.value, CellType.DYNAMIC_OBSTACLE.value]:
+                    # Check if water is passable (only for non-diagonal moves)
+                    if self.grid[ny][nx] == Terrain.WATER.value:
+                        # Water is impassable unless it's a straight move (not diagonal)
+                        if (dx, dy) in [d.value for d in Direction]:
+                            pass  # Allow straight moves through water
+                        else:
+                            continue  # Block diagonal moves through water
+                    
+  # Base move cost
+  base_cost = 1
+  if (dx, dy) not in [d.value for d in Direction]:
+   base_cost = 1.414  # diagonal
+
+   terrain_cost = self.get_terrain_cost((nx, ny))
+   total_cost = base_cost * terrain_cost
+   neighbors.append(((nx, ny), total_cost))
+
+  return neighbors
+
+  def get_terrain_cost(self, pos):
+        x, y = pos
+        cell_value = self.grid[y][x]
+        # Obstacles are already filtered, so handle terrains
+        if cell_value in [t.value for t in Terrain]:
+            return cell_value
+        return 1  # Default cost
+
+  def reset(self):
+        self.current_pos = self.start_pos
+        self.path = []
+        self.cost_so_far = 0
+        self.nodes_expanded = 0
+        self.execution_time = 0
+
+
+class BFSPlanner:
+    def __init__(self, agent):
+        self.agent = agent
+
+   def plan(self):
+        start_time = time.time()
+        start = self.agent.start_pos
+        goal = self.agent.goal_pos
+
+   frontier = deque([start])
+   came_from = {start: None}
+   nodes_expanded = 0
+
+   while frontier:
+            current = frontier.popleft()
+            nodes_expanded += 1
+
+  if current == goal:
+                break
+
+  for next_pos, _ in self.agent.get_neighbors(current):
+                if next_pos not in came_from:
+                    frontier.append(next_pos)
+                    came_from[next_pos] = current
+
+  if goal not in came_from:
+            self.agent.path = []
+            self.agent.cost_so_far = float("inf")
+            self.agent.nodes_expanded = nodes_expanded
+            self.agent.execution_time = time.time() - start_time
+            return []
+
+  # Reconstruct path
+  path = []
+  current = goal
+  while current != start:
+  path.append(current)
+  current = came_from[current]
+  path.reverse()
+
+   end_time = time.time()
+
+  self.agent.path = path
+        self.agent.cost_so_far = len(path)  # BFS assumes uniform cost of 1 per step
+        self.agent.nodes_expanded = nodes_expanded
+        self.agent.execution_time = end_time - start_time
+
+   return path
+
+
+class UniformCostPlanner:
+    def __init__(self, agent):
+        self.agent = agent
+
+   def plan(self):
+        start_time = time.time()
+        start = self.agent.start_pos
+        goal = self.agent.goal_pos
+
+   frontier = []
+        heapq.heappush(frontier, (0, start))
+        came_from = {start: None}
+        cost_so_far = {start: 0}
+        nodes_expanded = 0
+
+  while frontier:
+            current_cost, current = heapq.heappop(frontier)
+            nodes_expanded += 1
+
+   if current == goal:
+                break
+
+   for next_pos, move_cost in self.agent.get_neighbors(current):
+                new_cost = cost_so_far[current] + move_cost
+                if next_pos not in cost_so_far or new_cost < cost_so_far[next_pos]:
+                    cost_so_far[next_pos] = new_cost
+                    heapq.heappush(frontier, (new_cost, next_pos))
+                    came_from[next_pos] = current
+
+  if goal not in came_from:
+            self.agent.path = []
+            self.agent.cost_so_far = float("inf")
+            self.agent.nodes_expanded = nodes_expanded
+            self.agent.execution_time = time.time() - start_time
+            return []
+
+   path = []
+        current = goal
+        while current != start:
+            path.append(current)
+            current = came_from[current]
+        path.reverse()
+
+  end_time = time.time()
+        self.agent.path = path
+        self.agent.cost_so_far = cost_so_far[goal]
+        self.agent.nodes_expanded = nodes_expanded
+        self.agent.execution_time = end_time - start_time
+
+  return path
+
+
+class AStarPlanner:
+    def __init__(self, agent, heuristic_func=None):
+        self.agent = agent
+        self.heuristic = heuristic_func or self.manhattan_distance
+    def manhattan_distance(self, a, b):
+        return abs(a[0] - b[0]) + abs(a[1] - b[1])
+    def euclidean_distance(self, a, b):
+        return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
+    def plan(self):
+        start_time = time.time()
+        start = self.agent.start_pos
+        goal = self.agent.goal_pos
+        frontier = []
+        heapq.heappush(frontier, (0, start))
+        came_from = {start: None}
+        cost_so_far = {start: 0}
+        nodes_expanded = 0
+        while frontier:
+            _, current = heapq.heappop(frontier)
+            nodes_expanded += 1
+            if current == goal:
+                break
+
+   for next_pos, move_cost in self.agent.get_neighbors(current):
+                new_cost = cost_so_far[current] + move_cost
+                if next_pos not in cost_so_far or new_cost < cost_so_far[next_pos]:
+                    cost_so_far[next_pos] = new_cost
+                    priority = new_cost + self.heuristic(next_pos, goal)
+                    heapq.heappush(frontier, (priority, next_pos))
+                    came_from[next_pos] = current
+        if goal not in came_from:
+            self.agent.path = []
+            self.agent.cost_so_far = float("inf")
+            self.agent.nodes_expanded = nodes_expanded
+            self.agent.execution_time = time.time() - start_time
+            return []
+        path = []
+        current = goal
+        while current != start:
+            path.append(current)
+            current = came_from[current]
+        path.reverse()
+        end_time = time.time()
+        self.agent.path = path
+        self.agent.cost_so_far = cost_so_far[goal]
+        self.agent.nodes_expanded = nodes_expanded
+        self.agent.execution_time = end_time - start_time
+        return path
+
+
+class DynamicReplanner:
+    def __init__(self, agent, base_planner, max_restarts=10):
+        self.agent = agent
+        self.base_planner = base_planner
+        self.max_restarts = max_restarts
+    def plan(self, dynamic_obstacles=None):
+        sim_grid = copy.deepcopy(self.agent.grid)
+        if dynamic_obstacles:
+            for obstacle in dynamic_obstacles:
+                x, y = obstacle
+                if 0 <= y < len(sim_grid) and 0 <= x < len(sim_grid[0]):
+                    sim_grid[y][x] = CellType.DYNAMIC_OBSTACLE.value
+        temp_agent = Agent(
+            self.agent.start_pos,
+            self.agent.goal_pos,
+            sim_grid,
+            self.agent.movement_type
+        )
+        planner = self.base_planner(temp_agent)
+        path = planner.plan()
+        self.agent.path = path
+        self.agent.cost_so_far = temp_agent.cost_so_far
+        self.agent.nodes_expanded = temp_agent.nodes_expanded
+        self.agent.execution_time = temp_agent.execution_time
+        return path
+
+
+def load_grid_from_file(filename):
+    with open(filename, 'r') as f:
+        lines = f.readlines()
+    grid = []
+    for line in lines:
+        row = [int(cell) for cell in line.strip().split()]
+        grid.append(row)
+
+return grid
+
+
+def save_grid_to_file(grid, filename):
+    with open(filename, 'w') as f:
+        for row in grid:
+            f.write(' '.join(str(cell) for cell in row) + '\n')
+
+
+def create_test_maps():
+    # Small map (10x10)
+    small_map = [[Terrain.ROAD.value] * 10 for _ in range(10)]
+    small_map[3][3] = CellType.STATIC_OBSTACLE.value
+    small_map[4][4] = CellType.STATIC_OBSTACLE.value
+    small_map[5][5] = CellType.STATIC_OBSTACLE.value
+    save_grid_to_file(small_map, "small_map.txt")
+    # Medium map (20x20)
+    medium_map = [[Terrain.ROAD.value] * 20 for _ in range(20)]
+    for i in range(5, 15):
+        medium_map[i][i] = CellType.STATIC_OBSTACLE.value
+    save_grid_to_file(medium_map, "medium_map.txt")
+
+ # Large map (50x50)
+   large_map = [[Terrain.ROAD.value] * 50 for _ in range(50)]
+    for i in range(10, 40, 5):
+        for j in range(10, 40, 5):
+            large_map[i][j] = CellType.STATIC_OBSTACLE.value
+    save_grid_to_file(large_map, "large_map.txt")
+
+ # Dynamic map (15x15)
+   dynamic_map = [[Terrain.ROAD.value] * 15 for _ in range(15)]
+    for i in range(5, 10):
+        dynamic_map[i][5] = CellType.STATIC_OBSTACLE.value
+        dynamic_map[i][10] = CellType.STATIC_OBSTACLE.value
+    save_grid_to_file(dynamic_map, "dynamic_map.txt")
+
+
+def main():
+    create_test_maps()
+    grid = load_grid_from_file("medium_map.txt")
+    start_pos = (0, 0)
+    goal_pos = (len(grid[0]) - 1, len(grid) - 1)
+    agent = Agent(start_pos, goal_pos, grid)
+    planners = {
+        "BFS": BFSPlanner(agent),
+        "Uniform Cost": UniformCostPlanner(agent),
+        "A*": AStarPlanner(agent)
+    }
+    results = {}
+    for name, planner in planners.items():
+        agent.reset()
+        path = planner.plan()
+        results[name] = {
+            "path_cost": agent.cost_so_far,
+            "nodes_expanded": agent.nodes_expanded,
+            "time": agent.execution_time,
+            "path_length": len(path)
+        }
+        print(f"{name}: Cost={agent.cost_so_far}, Nodes={agent.nodes_expanded}, Time={agent.execution_time:.6f}s")
+    print("\nTesting dynamic replanning...")
+    agent.reset()
+    dynamic_obstacles = [(5, 5), (6, 6), (7, 7)]
+    replanner = DynamicReplanner(agent, AStarPlanner)
+    path = replanner.plan(dynamic_obstacles)
+    print(f"Dynamic A*: Cost={agent.cost_so_far}, Nodes={agent.nodes_expanded}, Time={agent.execution_time:.6f}s")
+    if path:
+        print(f"Path length: {len(path)}")
+        print(f"First few steps: {path[:5]}...")
+    else:
+        print("No path found!")
+
+
+if __name__ == "__main__":
+    main()
